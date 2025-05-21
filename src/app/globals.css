@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply font-sans bg-brand-gray-light text-brand-gray-text;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  /* For select dropdown arrow */
+  select {
+    background-image: url("data:image/svg+xml;utf8,<svg fill='%23666' height='10' viewBox='0 0 16 16' width='10' xmlns='http://www.w3.org/2000/svg'><path d='M2 5l6 6 6-6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.625rem center; /* right 10px */
+    background-size: 10px;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+  }
+}
+
+@layer components {
+  .braze-content-card-slot {
+    @apply min-h-[150px] bg-gray-200 border-2 border-dashed border-brand-gray-medium rounded-lg flex items-center justify-center text-brand-gray-textPlaceholder italic text-center p-4 mb-[35px];
+  }
+  .braze-content-card-slot.populated,
+  .braze-content-card-slot.default-populated {
+    @apply min-h-0 bg-transparent border-none p-0 text-left text-inherit font-normal;
+  }
+
+  /* Reusable input style from auth forms */
+  .input-auth {
+    @apply w-full px-4 py-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 sm:text-sm;
+  }
+   /* Password strength indicator */
+  .strength-indicator-base {
+    @apply h-1 mt-1.5 rounded-sm transition-all duration-300;
+  }
+}

@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* You can add any additional global styles here */
+:root {
+  --primary: #46fdae;
+  --primary-gradient: #c6fb4b;
+}
+
+@layer base {
+  body {
+    @apply bg-brand-gray-light text-brand-gray-text;
+  }
+  /* Basic reset for box-sizing can be useful */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+}
+
+
+
+
+
