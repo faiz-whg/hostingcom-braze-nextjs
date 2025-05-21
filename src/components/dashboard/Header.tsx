@@ -10,6 +10,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link'; // Changed from react-router-dom
 import Image from 'next/image';
 import NotificationOptInPopup from './NotificationOptInPopup'; // Assuming this will be .tsx
+import type { AppBrazeCard } from '@/types/braze'; // Updated import path
+import brazeService from '@/lib/services/braze';
+import { type ContentCards, type Card as BrazeBaseCard } from '@braze/web-sdk'; // Added BrazeBaseCard for explicit casting
 
 // --- SVG Icon Components ---
 /** @component ClockIcon - SVG component for a clock icon (placeholder). */
@@ -37,7 +40,7 @@ interface HeaderProps {
   hasUnreadNotification: boolean;
   /** @property onToggleMobileSidebar - Callback function to toggle the visibility of the mobile sidebar. */
   onToggleMobileSidebar: () => void;
-  /** @property isNotificationPopupVisible - Boolean to control the visibility of the notification opt-in popup. */
+  /** @property isNotificationPopupVisible - Boolean to control the visibility of the notification opt-in popup. (Note: Its role is reduced for the Braze-driven popup) */
   isNotificationPopupVisible: boolean;
   /** @property onNotificationClose - Callback function when the notification opt-in popup is closed. */
   onNotificationClose: () => void;
@@ -46,7 +49,7 @@ interface HeaderProps {
   /** @property onNotificationAskLater - Callback function when the user chooses 'Ask Later' in the notification opt-in popup. */
   onNotificationAskLater: () => void;
   /** @property notificationCount - The number of unread notifications (currently unused in UI, but prop exists). */
-  notificationCount: number; // This prop is defined but not visibly used in the current JSX for a badge count.
+  notificationCount: number;
 }
 
 /**
@@ -74,6 +77,14 @@ const Header: React.FC<HeaderProps> = ({
   // Ref for the bell icon wrapper, potentially for positioning the notification popup (though popup is modal-like).
   const bellWrapperRef = useRef<HTMLDivElement>(null);
 
+  // State for the actual Braze card object from the SDK
+  const [activeBrazeBaseCard, setActiveBrazeBaseCard] = useState<BrazeBaseCard | null>(null);
+  // State for the Braze card data shaped for the popup component
+  const [popupContentCard, setPopupContentCard] = useState<AppBrazeCard | null>(null);
+  // State to control actual visibility of the popup, considering Braze card and user actions
+  const [isActualPopupVisible, setIsActualPopupVisible] = useState<boolean>(false);
+  const hasLoggedNotificationImpressionRef = useRef<string | null>(null); // cardId of logged impression
+
   // Effect to handle clicks outside the dropdown menu to close it.
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -84,6 +95,177 @@ const Header: React.FC<HeaderProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Effect to fetch and manage Braze content card for notification opt-in
+  useEffect(() => {
+    let isMounted = true;
+    let unsubscribeId: string | undefined = undefined;
+
+    const initializeBrazeAndSubscribe = async () => {
+      try {
+        // Wait for Braze to initialize if it hasn't already
+        let attempts = 0;
+        while (!brazeService.isInitialized && attempts < 20 && isMounted) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          attempts++;
+        }
+
+        if (!isMounted) return;
+
+        if (!brazeService.isInitialized) {
+          console.error('[Header] Braze service initialization timed out for notification popup card.');
+          return;
+        }
+
+        const handleContentCardsUpdate = (contentCardsObject: ContentCards) => {
+          if (!isMounted) return;
+
+          const allSDKCards = contentCardsObject.cards as BrazeBaseCard[];
+          const foundCard = allSDKCards.find(
+            (card: BrazeBaseCard) => (card.extras as { slot_target?: string })?.slot_target === 'notification-optin-popup'
+          );
+          
+          setActiveBrazeBaseCard(foundCard || null);
+          // Cast the found SDK card to our AppBrazeCard type for the popup's props
+          // This assumes the SDK card object will have the necessary fields (title, description, etc.)
+          // based on the card type configured in Braze, matching AppBrazeCard structure.
+          setPopupContentCard(foundCard ? (foundCard as unknown as AppBrazeCard) : null);
+
+          if (foundCard) {
+            console.log('[Header] Braze notification card found:', foundCard.id);
+            // Check local storage to see if this specific card has been interacted with
+            const dismissed = localStorage.getItem(`notificationPopupDismissed_${foundCard.id}`);
+            const signedUp = localStorage.getItem(`notificationPopupSignedUp_${foundCard.id}`);
+            const askLater = localStorage.getItem(`notificationPopupAskLater_${foundCard.id}`);
+
+            if (!dismissed && !signedUp && !askLater) {
+              setIsActualPopupVisible(true);
+            } else {
+              setIsActualPopupVisible(false); // Already interacted with
+            }
+          } else {
+            console.log('[Header] No Braze notification card found for slot.');
+            setIsActualPopupVisible(false); // No card, no popup
+          }
+        };
+
+        // Initial fetch
+        const initialCards = brazeService.getCachedContentCards();
+        if (initialCards) {
+          handleContentCardsUpdate(initialCards);
+        }
+
+        // Subscribe to updates
+        unsubscribeId = brazeService.subscribeToContentCardsUpdates(handleContentCardsUpdate);
+
+      } catch (error) {
+        console.error('[Header] Error initializing Braze or subscribing for notification card:', error);
+      }
+    };
+
+    initializeBrazeAndSubscribe();
+
+    return () => {
+      isMounted = false;
+      if (unsubscribeId) {
+        brazeService.unsubscribeFromContentCardsUpdates(unsubscribeId);
+      }
+    };
+  }, []); // Run once on mount
+
+  // Handle closing the popup
+  const handlePopupClose = () => {
+    setIsActualPopupVisible(false);
+    if (activeBrazeBaseCard) {
+      activeBrazeBaseCard.dismissCard(); // Use SDK method to dismiss
+      localStorage.setItem(`notificationPopupDismissed_${activeBrazeBaseCard.id}`, 'true');
+    }
+    onNotificationClose(); // Call original handler if needed
+  };
+
+  const handlePopupSignUp = () => {
+    setIsActualPopupVisible(false);
+    if (activeBrazeBaseCard) {
+      brazeService.logContentCardClick(activeBrazeBaseCard as BrazeBaseCard);
+      localStorage.setItem(`notificationPopupSignedUp_${activeBrazeBaseCard.id}`, 'true');
+    }
+    onNotificationSignUp();
+  };
+
+  const handlePopupAskLater = () => {
+    setIsActualPopupVisible(false);
+    if (activeBrazeBaseCard) {
+      localStorage.setItem(`notificationPopupAskLater_${activeBrazeBaseCard.id}`, 'true');
+      // Optionally log a custom event to Braze for "Ask me later" if needed
+      // e.g., brazeService.logCustomEvent('notification_popup_ask_later', { card_id: activeBrazeBaseCard.id });
+    }
+    onNotificationAskLater();
+  };
+
+  // Update isActualPopupVisible if the card changes (e.g. new card from Braze, or card removed)
+  useEffect(() => {
+    if (activeBrazeBaseCard) {
+      const dismissed = localStorage.getItem(`notificationPopupDismissed_${activeBrazeBaseCard.id}`);
+      const signedUp = localStorage.getItem(`notificationPopupSignedUp_${activeBrazeBaseCard.id}`);
+      const askLater = localStorage.getItem(`notificationPopupAskLater_${activeBrazeBaseCard.id}`);
+      
+      if (!dismissed && !signedUp && !askLater) {
+        setIsActualPopupVisible(true);
+      } else {
+        setIsActualPopupVisible(false);
+      }
+    } else {
+      setIsActualPopupVisible(false); // No card, no popup
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBrazeBaseCard]); // Rerun when activeBrazeBaseCard changes
+
+  // Determine if the popup should be rendered in the DOM
+  // Render if we have content for the popup and it's currently set to be visible
+  const shouldRenderPopup = !!popupContentCard && isActualPopupVisible;
+
+  const handleBellIconClick = () => {
+    // Call the original onBellClick prop for other potential notification systems
+    onBellClick();
+
+    // Option B: If the Braze card for the opt-in popup exists, always show the popup.
+    if (activeBrazeBaseCard && activeBrazeBaseCard.id) {
+      console.log(`[Header] Bell click: Forcing display of notification popup for card ${activeBrazeBaseCard.id}, ignoring localStorage flags.`);
+      // To ensure it shows, we might also need to clear localStorage flags or ensure the effect that reads them re-evaluates.
+      // Forcing isActualPopupVisible to true should be enough as shouldRenderPopup depends on it.
+      // We can also clear the flags to make it like a fresh appearance if desired.
+      // localStorage.removeItem(`notificationPopupDismissed_${activeBrazeBaseCard.id}`);
+      // localStorage.removeItem(`notificationPopupSignedUp_${activeBrazeBaseCard.id}`);
+      // localStorage.removeItem(`notificationPopupAskLater_${activeBrazeBaseCard.id}`);
+      setIsActualPopupVisible(true); 
+    } else {
+      // If no specific card, perhaps the original onBellClick handles other general notifications.
+      // console.log("[Header] Bell click: No active Braze notification card to show.");
+    }
+  };
+
+  // Effect to log impression for the notification popup card
+  useEffect(() => {
+    if (shouldRenderPopup && popupContentCard && activeBrazeBaseCard && activeBrazeBaseCard.id) {
+      if (hasLoggedNotificationImpressionRef.current !== activeBrazeBaseCard.id) {
+        console.log(`[Header] Logging impression for notification card ID: ${activeBrazeBaseCard.id}`);
+        brazeService.logContentCardImpression(activeBrazeBaseCard as BrazeBaseCard);
+        hasLoggedNotificationImpressionRef.current = activeBrazeBaseCard.id;
+      }
+    } else if (!shouldRenderPopup) {
+      // If popup is not rendered, reset the ref if the current card is no longer active
+      // This allows re-logging if the same card appears again after being hidden for other reasons
+      if (activeBrazeBaseCard && hasLoggedNotificationImpressionRef.current === activeBrazeBaseCard.id) {
+        // Potentially too aggressive to reset here, consider if card transitions require this.
+        // For now, let's assume a card disappearing and reappearing should log a new impression.
+        // hasLoggedNotificationImpressionRef.current = null; 
+      }
+      // More simply, if there's no card, no impression can be logged or needs to be tracked.
+      if (!activeBrazeBaseCard && hasLoggedNotificationImpressionRef.current) {
+        hasLoggedNotificationImpressionRef.current = null;
+      }
+    }
+  }, [shouldRenderPopup, popupContentCard, activeBrazeBaseCard]);
 
   return (
     <header className="bg-white border-b border-brand-gray-dark px-4 sm:px-6 py-3 flex justify-between items-center fixed top-0 left-0 right-0 z-30 shadow-header h-[60px]">
@@ -117,7 +299,7 @@ const Header: React.FC<HeaderProps> = ({
           <div className="relative" ref={bellWrapperRef}>
             <button
               id="notificationBellIcon"
-              onClick={onBellClick}
+              onClick={handleBellIconClick}
               className="flex items-center justify-center w-8 h-8 text-brand-gray-textLight hover:text-brand-green transition-colors relative"
               aria-label={hasUnreadNotification ? "View notifications (unread)" : "View notifications"}
             >
@@ -126,13 +308,16 @@ const Header: React.FC<HeaderProps> = ({
                 <span className="absolute top-0 right-0 block w-2.5 h-2.5 bg-notification-dot rounded-full border border-white pointer-events-none" aria-hidden="true"></span>
               )}
             </button>
-            <NotificationOptInPopup
-              isVisible={isNotificationPopupVisible}
-              onClose={onNotificationClose}
-              onSignUp={onNotificationSignUp}
-              onAskLater={onNotificationAskLater}
-              animationStyle="rise"
-            />
+            {shouldRenderPopup && (
+              <NotificationOptInPopup
+                isVisible={true} // Controls animation; actual rendering is controlled by shouldRenderPopup
+                onClose={handlePopupClose}
+                onSignUp={handlePopupSignUp}
+                onAskLater={handlePopupAskLater}
+                animationStyle="rise"
+                brazeCard={popupContentCard} // Pass the data shaped for the popup
+              />
+            )}
           </div>
         </div>
         

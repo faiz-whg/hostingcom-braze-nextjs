@@ -7,6 +7,44 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import type { AppBrazeCard } from '@/types/braze'; // Updated import path
+
+// --- Custom Type Definitions for Braze Cards ---
+// Based on BrazePromoBannerCard.tsx and provided Braze object
+// export interface AppBrazeCard { // <-- REMOVE THIS DEFINITION
+//   id: string;
+//   viewed?: boolean;
+//   title?: string | null;
+//   imageUrl?: string | null;
+//   description?: string | null;
+//   created?: string;
+//   updated?: string;
+//   categories?: string[];
+//   expiresAt?: string | null;
+//   url?: string | null;
+//   linkText?: string | null;
+//   aspectRatio?: number;
+//   extras?: {
+//     slot_target?: string;
+//     optin_button_above_text?: string;
+//     optin_button_below_text?: string;
+//     optin_primary_button_text?: string;
+//     optin_secondary_button_text?: string;
+//     [key: string]: string | number | boolean | null | undefined; // Allow other potential extras
+//   };
+//   pinned?: boolean;
+//   dismissible?: boolean;
+//   clicked?: boolean;
+//   dismissed?: boolean;
+//   isControl?: boolean;
+//   test?: boolean;
+//   ti?: string | null;
+//   ii?: string | null;
+//   si?: string | null;
+//   oe?: string;
+//   ae?: boolean;
+// }
+// --- End Custom Type Definitions ---
 
 /**
  * @interface NotificationOptInPopupProps
@@ -23,6 +61,8 @@ interface NotificationOptInPopupProps {
   onAskLater: () => void;
   /** @property animationStyle - Optional animation style for the popup entrance. */
   animationStyle?: 'fade' | 'slide' | 'bounce' | 'scale' | 'rise';
+  /** @property brazeCard - Optional Braze content card data. */
+  brazeCard?: AppBrazeCard | null;
 }
 
 /**
@@ -39,6 +79,7 @@ const NotificationOptInPopup: React.FC<NotificationOptInPopupProps> = ({
   onClose, 
   onSignUp, 
   onAskLater,
+  brazeCard,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   animationStyle = 'bounce' // Keeping this prop for future customization options
 }) => {
@@ -94,6 +135,16 @@ const NotificationOptInPopup: React.FC<NotificationOptInPopupProps> = ({
 
   // Only render when visible or becoming visible
   if (animationState === 'hidden') return null;
+
+  // Determine content based on Braze card or fallback
+  const useBrazeContent = brazeCard && brazeCard.extras?.slot_target === 'notification-optin-popup';
+
+  const title = useBrazeContent && brazeCard?.title ? brazeCard.title : "Notifications";
+  const description = useBrazeContent && brazeCard?.description ? brazeCard.description : "Stay connected with the latest from hosting.com!";
+  const optInAboveText = useBrazeContent && brazeCard?.extras?.optin_button_above_text ? brazeCard.extras.optin_button_above_text : "I want to receive email, text and in-app notifications from hosting.com including account updates, renewals and promotions.";
+  const primaryButtonText = useBrazeContent && brazeCard?.extras?.optin_primary_button_text ? brazeCard.extras.optin_primary_button_text : "Sign me up";
+  const secondaryButtonText = useBrazeContent && brazeCard?.extras?.optin_secondary_button_text ? brazeCard.extras.optin_secondary_button_text : "Ask me later";
+  const optInBelowText = useBrazeContent && brazeCard?.extras?.optin_button_below_text ? brazeCard.extras.optin_button_below_text : 'By clicking "Sign me up" you consent to receive promotional emails and text messages from or on behalf hosting.com that may be sent via automated telephone dialling system. Providing consent is not a condition of purchase. You can manage your preferences at any time.';
 
   // Animation styles with bounce effect for better visual feedback
   const getAnimationStyles = (): React.CSSProperties => {
@@ -176,30 +227,30 @@ const NotificationOptInPopup: React.FC<NotificationOptInPopupProps> = ({
       </button>
       <div className="p-5">
         <div className="mb-4">
-          <h3 id="notification-popup-title" className="text-lg font-semibold text-popup-header-text">Notifications</h3>
+          <h3 id="notification-popup-title" className="text-lg font-semibold text-popup-header-text">{title}</h3>
         </div>
         <h4 className="text-base font-medium text-popup-header-text mb-2 leading-snug">
-        Stay connected with the latest from hosting.com!
+          {description}
         </h4>
         <p className="text-sm text-brand-gray-textMedium leading-relaxed mb-5">
-        I want to receive email, text and in-app notifications from hosting.com including account updates, renewals and promotions.
+          {optInAboveText}
         </p>
         <div className="flex flex-col gap-3 mt-5 mb-4">
           <button
             onClick={onSignUp}
             className="w-full px-4 py-3 rounded-md text-sm font-medium bg-popup-header-text text-white hover:bg-gray-700 transition-colors border border-transparent"
           >
-            Sign me up
+            {primaryButtonText}
           </button>
           <button
             onClick={onAskLater}
             className="w-full px-4 py-2 rounded-md text-sm font-medium bg-white text-brand-gray-textMedium hover:bg-brand-gray-light hover:text-popup-header-text transition-colors border border-white"
           >
-            Ask me later
+            {secondaryButtonText}
           </button>
         </div>
         <p className="text-xs text-brand-gray-textPlaceholder mt-4 mb-0 leading-normal">
-          By clicking &quot;Sign me up&quot; you consent to receive promotional emails and text messages from or on behalf hosting.com that may be sent via automated telephone dialling system. Providing consent is not a condition of purchase. You can manage your preferences at any time.
+          {optInBelowText}
         </p>
       </div>
     </div>

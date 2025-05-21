@@ -8,23 +8,25 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card as BrazeBaseCard, ContentCards } from '@braze/web-sdk';
+import type { AppBrazeCard } from '@/types/braze'; // Import the shared type
 import brazeService from '@/lib/services/braze';
 import Image from 'next/image';
 import BrazePromoBannerCardSkeleton from './BrazePromoBannerCardSkeleton';
 
 // --- Custom Type Definitions for Braze Cards ---
-interface AppBrazeCard extends Omit<BrazeBaseCard, 'extras'> {
-  title?: string;
-  description?: string;
-  imageUrl?: string;
-  url?: string;
-  linkText?: string;
-  extras?: Record<string, string | number | boolean | null | undefined> & {
-    slot_target?: string;
-    count_down_hours?: string | number;
-    alt_text?: string;
-  };
-}
+// Remove local AppBrazeCard definition
+// interface AppBrazeCard extends Omit<BrazeBaseCard, 'extras'> {
+//   title?: string;
+//   description?: string;
+//   imageUrl?: string;
+//   url?: string;
+//   linkText?: string;
+//   extras?: Record<string, string | number | boolean | null | undefined> & {
+//     slot_target?: string;
+//     count_down_hours?: string | number;
+//     alt_text?: string;
+//   };
+// }
 // --- End Custom Type Definitions ---
 
 
@@ -43,7 +45,8 @@ interface BrazePromoBannerCardProps {
 }
 
 const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) => {
-  const [displayablePromoBanners, setDisplayablePromoBanners] = useState<AppBrazeCard[]>([]);
+  // Store BrazeBaseCard objects from the SDK
+  const [brazeSDKCards, setBrazeSDKCards] = useState<BrazeBaseCard[]>([]);
   const [currentCardIndexForDisplay, setCurrentCardIndexForDisplay] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -56,7 +59,8 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const cardIdForCurrentCountdownPartsRef = useRef<string | undefined>(undefined);
   const dataFetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hasLoggedImpressionRef = useRef<boolean>(false);
+  // Store the ID of the card for which an impression has been logged
+  const loggedImpressionCardIdRef = useRef<string | null>(null);
 
   // Effect to handle initialization and subscription setup
   useEffect(() => {
@@ -66,7 +70,7 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
       if (!isMounted) return;
       
       setIsLoading(true);
-      hasLoggedImpressionRef.current = false;
+      loggedImpressionCardIdRef.current = null;
       
       // Clear any existing timeouts
       if (dataFetchTimeoutRef.current) {
@@ -78,12 +82,14 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
       const slotIdUnderscore = slotId.replace(/-/g, '_');
       
       if (cachedBrazeSDKResult?.cards?.length) {
-        const filteredForSlot = (cachedBrazeSDKResult.cards as AppBrazeCard[]).filter(
-          (card) => card.extras?.slot_target === slotId || card.extras?.slot_target === slotIdUnderscore
+        const filteredForSlot = (cachedBrazeSDKResult.cards as BrazeBaseCard[]).filter(
+          (card) => (card.extras as { slot_target?: string })?.slot_target === slotId || 
+                    (card.extras as { slot_target?: string })?.slot_target === slotIdUnderscore
         );
         
         if (filteredForSlot.length > 0 && isMounted) {
-          setDisplayablePromoBanners(filteredForSlot);
+          console.log(`[BrazePromo '${slotId}'] Using cached cards:`, filteredForSlot.map(c => c.id));
+          setBrazeSDKCards(filteredForSlot);
           setCurrentCardIndexForDisplay(0);
           setIsLoading(false);
           return;
@@ -119,29 +125,33 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
           unsubscribeId = brazeService.subscribeToContentCardsUpdates((contentCardsObject: ContentCards) => {
             if (!isMounted) return;
             
-            const allCards = contentCardsObject.cards as AppBrazeCard[];
-            const filteredForSlot = allCards.filter(
-              (card) => card.extras?.slot_target === slotId || card.extras?.slot_target === slotIdUnderscore
+            const allCardsFromSDK = contentCardsObject.cards as BrazeBaseCard[];
+            const filteredForSlot = allCardsFromSDK.filter(
+              (card) => (card.extras as { slot_target?: string })?.slot_target === slotId || 
+                        (card.extras as { slot_target?: string })?.slot_target === slotIdUnderscore
             );
+            
+            console.log(`[BrazePromo '${slotId}'] Received card update:`, filteredForSlot.map(c => c.id));
 
-            setDisplayablePromoBanners(prevBanners => {
-              // Only update if the banners have actually changed
+            setBrazeSDKCards(prevBanners => {
               const prevIds = new Set(prevBanners.map(b => b.id));
               const newIds = new Set(filteredForSlot.map(b => b.id));
               
               if (prevIds.size !== newIds.size || 
-                  filteredForSlot.some(card => !prevIds.has(card.id)) ||
-                  prevBanners.some(card => !newIds.has(card.id))) {
+                  filteredForSlot.some(card => card.id && !prevIds.has(card.id)) || // Ensure card.id is checked
+                  prevBanners.some(card => card.id && !newIds.has(card.id))) { // Ensure card.id is checked
                 return filteredForSlot;
               }
               return prevBanners;
             });
             
             if (filteredForSlot.length > 0) {
-              // Only update if the index would change
               setCurrentCardIndexForDisplay(prev => 
                 prev < filteredForSlot.length ? prev : 0
               );
+            } else {
+              // If no cards for the slot, reset index
+              setCurrentCardIndexForDisplay(0);
             }
             
             setIsLoading(false);
@@ -176,19 +186,23 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
   }, [slotId]); // Only depend on slotId
 
   // THIS IS THE EFFECT IN QUESTION (around original line 133)
-  // Update initialCountdownHoursMap when displayablePromoBanners changes
+  // Update initialCountdownHoursMap when brazeSDKCards changes
   useEffect(() => {
     if (isLoading) return;
     
     const newMap: Record<string, number> = {};
     let shouldUpdate = false;
     
-    displayablePromoBanners.forEach(card => {
-      if (card?.id?.trim() && card?.extras?.count_down_hours != null) {
-        const initialHours = parseInt(String(card.extras.count_down_hours), 10);
+    brazeSDKCards.forEach(card => {
+      const cardExtras = card.extras as { count_down_hours?: string | number };
+      if (card?.id?.trim() && cardExtras?.count_down_hours != null) {
+        const initialHours = parseInt(String(cardExtras.count_down_hours), 10);
         if (!isNaN(initialHours) && initialHours > 0) {
-          newMap[card.id] = initialHours;
-          shouldUpdate = true;
+          // Ensure card.id is a string before using as key
+          if (typeof card.id === 'string') {
+            newMap[card.id] = initialHours;
+            shouldUpdate = true;
+          }
         }
       }
     });
@@ -200,36 +214,38 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
         return prevStr === newStr ? prev : newMap;
       });
     }
-  }, [displayablePromoBanners, isLoading]);
+  }, [brazeSDKCards, isLoading]);
   
   // Memoize cardToDisplay to prevent unnecessary re-renders
-  const cardToDisplay = React.useMemo<AppBrazeCard | undefined>(() => {
-    return displayablePromoBanners[currentCardIndexForDisplay];
-  }, [displayablePromoBanners, currentCardIndexForDisplay]);
+  // cardToDisplay is now a BrazeBaseCard or undefined
+  const cardToDisplay = React.useMemo<BrazeBaseCard | undefined>(() => {
+    return brazeSDKCards[currentCardIndexForDisplay];
+  }, [brazeSDKCards, currentCardIndexForDisplay]);
 
   // Autoplay slideshow logic
   useEffect(() => {
-    if (displayablePromoBanners.length <= 1 || isLoading) {
+    if (brazeSDKCards.length <= 1 || isLoading || !cardToDisplay) {
       return;
     }
 
-    const displayDurationConfig = 6000;
+    const displayDurationConfig = (cardToDisplay.extras as { display_duration_ms?: number })?.display_duration_ms ?? 6000;
     const exitAnimationDuration = 1000;
 
     const slideshowTimer = setTimeout(() => {
       setIsTransitioning(true);
       
       setTimeout(() => {
-        hasLoggedImpressionRef.current = false;
-        setCurrentCardIndexForDisplay((prevIndex) => (prevIndex + 1) % displayablePromoBanners.length);
+        // Impression for the *next* card will be logged by its own effect when cardToDisplay changes.
+        // No need to reset loggedImpressionCardIdRef.current here directly, the check against card ID handles it.
+        setCurrentCardIndexForDisplay((prevIndex) => (prevIndex + 1) % brazeSDKCards.length);
         setIsTransitioning(false);
       }, exitAnimationDuration); 
-    }, displayDurationConfig); 
+    }, displayDurationConfig);
 
     return () => {
       clearTimeout(slideshowTimer);
     };
-  }, [isLoading, displayablePromoBanners, currentCardIndexForDisplay]);
+  }, [isLoading, brazeSDKCards, currentCardIndexForDisplay, cardToDisplay]); // Added cardToDisplay dependency
 
   // Effect to manage the animation states for incoming content
   useEffect(() => {
@@ -256,8 +272,10 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
 
     if (cardToDisplay && typeof cardToDisplay.id === 'string' && cardToDisplay.id.trim() !== '') {
       const currentCardId = cardToDisplay.id;
-      if (cardToDisplay.extras && cardToDisplay.extras.count_down_hours !== undefined && cardToDisplay.extras.count_down_hours !== null) {
-        const rawCountdownHours = cardToDisplay.extras.count_down_hours;
+      // cardToDisplay is BrazeBaseCard, extras are generic.
+      const cardExtras = cardToDisplay.extras as { count_down_hours?: string | number };
+      if (cardExtras && cardExtras.count_down_hours !== undefined && cardExtras.count_down_hours !== null) {
+        const rawCountdownHours = cardExtras.count_down_hours;
         const hoursFromExtras = parseInt(String(rawCountdownHours), 10);
 
         if (!isNaN(hoursFromExtras) && hoursFromExtras > 0) {
@@ -323,43 +341,56 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
   }, [cardToDisplay, initialCountdownHoursMap, targetEndTimes]);
 
   useEffect(() => {
-    if (cardToDisplay && !hasLoggedImpressionRef.current) {
-      brazeService.logContentCardImpression(cardToDisplay as unknown as BrazeBaseCard);
-      hasLoggedImpressionRef.current = true;
+    if (cardToDisplay && cardToDisplay.id && loggedImpressionCardIdRef.current !== cardToDisplay.id) {
+      console.log(`[BrazePromo '${slotId}'] Logging impression for card ID: ${cardToDisplay.id}`);
+      brazeService.logContentCardImpression(cardToDisplay);
+      loggedImpressionCardIdRef.current = cardToDisplay.id;
+    } else if (!cardToDisplay && loggedImpressionCardIdRef.current) {
+      loggedImpressionCardIdRef.current = null;
     }
-  }, [cardToDisplay]);
+  }, [cardToDisplay, slotId]);
+
+  // Properties for rendering, derived from cardToDisplay with type assertions
+  // This approach helps if the linter struggles with direct casting to AppBrazeCard in JSX
+  const title = cardToDisplay ? (cardToDisplay as any).title as string | undefined : undefined;
+  const description = cardToDisplay ? (cardToDisplay as any).description as string | undefined : undefined;
+  const imageUrl = cardToDisplay ? (cardToDisplay as any).imageUrl as string | undefined : undefined;
+  const linkText = cardToDisplay ? (cardToDisplay as any).linkText as string | undefined : undefined;
+  const clickUrl = cardToDisplay ? (cardToDisplay as any).url as string | undefined : undefined;
+
+  const altText = cardToDisplay?.extras?.alt_text as string | undefined || 'Promotional image';
+  // const countDownHours = cardToDisplay?.extras?.count_down_hours as string | number | undefined; // Already handled in countdown effect
+  // const displayDurationMs = cardToDisplay?.extras?.display_duration_ms as number | undefined ?? 6000; // Already handled in autoplay effect
 
   const handleCardClick = () => {
-    if (!cardToDisplay) return;
-    const clickUrl = cardToDisplay.url;
-    if (clickUrl) {
-      window.open(clickUrl, '_blank');
-      brazeService.logContentCardClick(cardToDisplay as unknown as BrazeBaseCard);
-    }
+    if (!cardToDisplay || !cardToDisplay.id || !clickUrl) return;
+    
+    window.open(clickUrl, '_blank');
+    brazeService.logContentCardClick(cardToDisplay);
   };
 
-  const imageUrl = cardToDisplay?.imageUrl;
-  const exitAnimationDuration = 1000;
+  // renderableCardData can still be useful for id or other direct AppBrazeCard specific logic if any.
+  const renderableCardData = cardToDisplay as AppBrazeCard | undefined;
+
+  const exitAnimationDuration = 1000; // This was defined after imageUrl, moved it here for grouping constants
 
   const handleNext = () => {
-    if (isTransitioning || displayablePromoBanners.length <= 1) return;
+    if (isTransitioning || brazeSDKCards.length <= 1) return;
     setIsTransitioning(true);
     setTimeout(() => {
-      hasLoggedImpressionRef.current = false;
       setCurrentCardIndexForDisplay((prevIndex) =>
-        prevIndex === displayablePromoBanners.length - 1 ? 0 : prevIndex + 1
+        prevIndex === brazeSDKCards.length - 1 ? 0 : prevIndex + 1
       );
       setIsTransitioning(false);
     }, exitAnimationDuration);
   };
 
   const handlePrev = () => {
-    if (isTransitioning || displayablePromoBanners.length <= 1) return;
+    if (isTransitioning || brazeSDKCards.length <= 1) return;
     setIsTransitioning(true);
     setTimeout(() => {
-      hasLoggedImpressionRef.current = false;
       setCurrentCardIndexForDisplay((prevIndex) =>
-        prevIndex === 0 ? displayablePromoBanners.length - 1 : prevIndex - 1
+        prevIndex === 0 ? brazeSDKCards.length - 1 : prevIndex - 1
       );
       setIsTransitioning(false);
     }, exitAnimationDuration);
@@ -387,11 +418,11 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
   return (
     <div 
       className="relative flex h-[160px] w-full rounded-lg shadow-md overflow-hidden bg-gradient-to-br from-[#46fdae] to-[#c6fb4b] cursor-pointer"
-      onClick={!cardToDisplay ? undefined : handleCardClick}
+      onClick={!cardToDisplay || !clickUrl ? undefined : handleCardClick}
     >
       <div className="h-full aspect-square bg-white/40 flex-shrink-0"></div>
 
-      {cardToDisplay && displayablePromoBanners.length > 1 && (
+      {cardToDisplay && brazeSDKCards.length > 1 && (
         <div className="absolute top-2 right-2 flex space-x-1 z-20">
           <button 
             onClick={(e) => { e.stopPropagation(); handlePrev(); }}
@@ -431,7 +462,7 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
                 <div className="w-[calc(100%-16px)] h-[calc(100%-16px)] relative">
                   <Image
                     src={imageUrl}
-                    alt={cardToDisplay.extras?.alt_text || 'Promotional image'}
+                    alt={altText}
                     fill
                     sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                     className="object-contain"
@@ -448,28 +479,28 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
 
             <div className="flex-1 p-4 flex flex-col justify-between items-start min-w-0">
               <div className="min-w-0">
-                {cardToDisplay.title && 
+                {title && 
                   <h3 className="text-lg font-medium mb-1 truncate">
-                    {cardToDisplay.title}
+                    {title}
                   </h3>}
-                {cardToDisplay.description &&
+                {description &&
                   <p className="text-sm text-gray-600 mb-2 line-clamp-2">
-                    {cardToDisplay.description}
+                    {description}
                   </p>}
               </div>
-              {cardToDisplay.linkText && (
+              {linkText && (
                 <div className="mt-auto pt-2 flex items-center self-stretch"> 
                   <button 
                     onClick={(e) => { e.stopPropagation(); handleCardClick(); }} 
                     className="group relative inline-flex items-center justify-center px-5 py-2.5 text-sm font-medium text-white bg-[#2e4a45] rounded-lg hover:bg-[#253c37] transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#253c37] overflow-hidden"
                   >
-                    {cardToDisplay.linkText || 'Learn More'}
+                    {linkText || 'Learn More'}
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 ml-1.5 transform transition-transform duration-200 ease-in-out group-hover:translate-x-1">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                     </svg>
                   </button>
                   <AnimatePresence mode="wait">
-                    {isCountdownActive && countdownParts && cardToDisplay && typeof cardToDisplay.id === 'string' && (
+                    {isCountdownActive && countdownParts && cardToDisplay && cardToDisplay.id && (
                       <motion.div 
                         key={`countdown-block-${cardToDisplay.id}`}
                         className="ml-3 flex items-center"
@@ -480,13 +511,14 @@ const BrazePromoBannerCard: React.FC<BrazePromoBannerCardProps> = ({ slotId }) =
                       >
                         {(() => {
                           let initialTotalHoursForCurrentCardDisplay: number | undefined;
-                          if (cardToDisplay.extras && (cardToDisplay.extras.count_down_hours !== undefined && cardToDisplay.extras.count_down_hours !== null)) {
-                            const parsedHours = parseInt(String(cardToDisplay.extras.count_down_hours), 10);
+                          const cardExtras = cardToDisplay.extras as { count_down_hours?: string | number} | undefined;
+                          if (cardExtras && (cardExtras.count_down_hours !== undefined && cardExtras.count_down_hours !== null)) {
+                            const parsedHours = parseInt(String(cardExtras.count_down_hours), 10);
                             if (!isNaN(parsedHours) && parsedHours > 0) {
                               initialTotalHoursForCurrentCardDisplay = parsedHours;
                             }
                           }
-                          if (initialTotalHoursForCurrentCardDisplay === undefined && cardToDisplay.id) {
+                          if (initialTotalHoursForCurrentCardDisplay === undefined && cardToDisplay.id && typeof cardToDisplay.id === 'string') {
                             initialTotalHoursForCurrentCardDisplay = initialCountdownHoursMap[cardToDisplay.id];
                           }
                           let currentHourValue = parseInt(countdownParts.hours, 10);
